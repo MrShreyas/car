@@ -1,0 +1,7 @@
+g++ main.cpp src/tiny_gltf_impl.cpp src/glad.c -o main.exe -Iinclude -Llib -lglfw3 -lopengl32 -lgdi32 -ldwmapi
+no need to run above command
+
+mkdir build
+cd build
+cmake -G "MinGW Makefiles" ..
+cmake --build .
