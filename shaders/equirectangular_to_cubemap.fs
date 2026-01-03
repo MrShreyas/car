@@ -19,6 +19,10 @@ void main()
 {
     vec3 N = normalize(WorldPos);
     vec2 uv = sampleSphericalMap(N);
+
+    // 🔥 Fix upside-down HDR: flip V
+    uv.y = 1.0 - uv.y;
+
     vec3 color = texture(equirectangularMap, uv).rgb;
     FragColor = vec4(color, 1.0);
 }

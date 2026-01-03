@@ -47,22 +47,14 @@ float        prefilterMaxMip = 0.0f;
 struct PlacedModel
 {
     Model* model;
-    glm::mat4 baseModelMatrix; // scale + height offset (+ position for static)
+    glm::mat4 baseModelMatrix;
     glm::vec3 bboxMin;
     glm::vec3 bboxMax;
-    bool movable;              // true = this one is drivable
+    bool movable;
 };
 
 std::vector<PlacedModel> placedModels;
-
-// --- Car driving state (for the drivable Shelby) ---
-glm::vec3 carPos(10.0f, 0.0f, 0.0f); // initial world position
-float     carYaw   = 0.0f;           // degrees, rotation around Y
-float     carSpeed = 0.0f;           // units/sec
-
-const float CAR_ACCEL      = 5.0f;   // acceleration
-const float CAR_FRICTION   = 2.0f;   // passive slowdown
-const float CAR_TURN_SPEED = 60.0f;  // degrees per second
+glm::vec3 carOffset(0.0f);
 
 // ============================================================================
 // Forward declarations
@@ -89,12 +81,7 @@ void renderQuad();
 void placeModel(Model &m, glm::vec3 position, float heightOffset, float desiredHeight, bool movable)
 {
     glm::mat4 modelMat = glm::mat4(1.0f);
-
-    // For static models: bake in world position
-    // For movable models: we ignore 'position' here and drive them via carPos
-    if (!movable)
-        modelMat = glm::translate(modelMat, position);
-
+    modelMat = glm::translate(modelMat, position);
     modelMat = glm::translate(modelMat, glm::vec3(0.0f, heightOffset, 0.0f));
 
     // Assumes Model::GetNormalizationScale() returns 1.0f / originalHeight
@@ -177,10 +164,7 @@ int main()
     // desiredHeight = final Y-size in world units
     placeModel(RaptorModel, glm::vec3(0.0f,  0.0f, 0.0f),  -1.0f, 1.5f, false);
     placeModel(CarModel,   glm::vec3(5.0f,  0.0f, 0.0f),  -1.0f, 1.5f, false);
-
-    // Drivable Shelby; pass position (0,0,0) because we’ll control it via carPos
-    placeModel(CarModel2,  glm::vec3(0.0f, 0.0f, 0.0f),   -1.0f, 1.5f, true);
-    // carPos is already (10, 0, 0) global, so it appears offset to the side
+    placeModel(CarModel2,  glm::vec3(10.0f, 0.0f, 0.0f),  -1.0f, 1.5f, false);
 
     float startTime = static_cast<float>(glfwGetTime());
 
@@ -194,14 +178,13 @@ int main()
         lastFrame = currentFrame;
 
         processInput(window);
-
+        camera.Update(deltaTime);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         int width, height;
         glfwGetFramebufferSize(window, &width, &height);
-        if (height == 0) height = 1;
-        glViewport(0, 0, width, height);
+        glViewport(0, 0, width, height); // *** keep aspect ratio correct on resize
 
         glm::mat4 projection = glm::perspective(
             glm::radians(camera.Zoom),
@@ -211,7 +194,7 @@ int main()
         );
         glm::mat4 view = camera.GetViewMatrix();
 
-        // Simple fade (if you need it)
+        // simple fade example, if you really need it
         float startFadeTime = 2.0f;
         float endFadeTime   = 4.0f;
         float progress = glm::clamp(
@@ -226,6 +209,7 @@ int main()
         // --------------------------------------------------------------------
         if (envCubemap != 0)
         {
+            // 10: irradiance, 11: prefiltered, 12: BRDF LUT
             glActiveTexture(GL_TEXTURE0 + 10);
             glBindTexture(GL_TEXTURE_CUBE_MAP, (irradianceMap ? irradianceMap : envCubemap));
 
@@ -242,9 +226,9 @@ int main()
         ourShader.setMat4("view", view);
         ourShader.setVec3("viewPos", camera.Position);
 
-        // Make sure these names match your model_loading.fs
+        // *** IMPORTANT: match shader uniform names ***
         ourShader.setInt("irradianceMap", 10);
-        ourShader.setInt("prefilterMap", 11);   // or "prefilteredMap" if your FS uses that
+        ourShader.setInt("prefilterMap", 11);    // <--- was "prefilteredMap"
         ourShader.setInt("brdfLUT", 12);
         ourShader.setFloat("prefilterMaxMip", prefilterMaxMip);
         ourShader.setFloat("materialTransparency", transparency);
@@ -255,7 +239,7 @@ int main()
         carShader.setMat4("view", view);
         carShader.setVec3("viewPos", camera.Position);
         carShader.setInt("irradianceMap", 10);
-        carShader.setInt("prefilterMap", 11);
+        carShader.setInt("prefilterMap", 11);    // <--- same fix here
         carShader.setInt("brdfLUT", 12);
         carShader.setFloat("prefilterMaxMip", prefilterMaxMip);
         carShader.setFloat("materialTransparency", transparency);
@@ -274,16 +258,10 @@ int main()
             shader->setFloat("materialTransparency", transparency);
 
             glm::mat4 finalModel = pm.baseModelMatrix;
-
-            if (pm.movable && pm.model == &CarModel2)
+            if (pm.movable)
             {
-                // Build dynamic transform for the drivable Shelby
-                glm::mat4 dyn = glm::mat4(1.0f);
-                dyn = glm::translate(dyn, carPos);
-                dyn = glm::rotate(dyn, glm::radians(carYaw), glm::vec3(0.0f, 1.0f, 0.0f));
-
-                // Apply base (scale + height) after our dynamic transform
-                finalModel = dyn * pm.baseModelMatrix;
+                glm::mat4 offsetMat = glm::translate(glm::mat4(1.0f), carOffset);
+                finalModel = offsetMat * pm.baseModelMatrix;
             }
 
             shader->setMat4("model", finalModel);
@@ -308,53 +286,19 @@ void processInput(GLFWwindow* window)
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
 
-    // --- CAMERA movement (WASD) ---
+    float speed = 4.5f * deltaTime;
+
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD,  deltaTime);
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT,     deltaTime);
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT,    deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(JUMP, deltaTime);
-
-    // --- CAR driving (arrow keys) ---
-    // Accelerate / brake
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
-        carSpeed += CAR_ACCEL * deltaTime;
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
-        carSpeed -= CAR_ACCEL * deltaTime;
-
-    // Steering (flip when reversing so it feels like a real car)
-    if (std::fabs(carSpeed) > 0.01f)
-    {
-        float dir = (carSpeed > 0.0f) ? 1.0f : -1.0f;
-        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
-            carYaw += CAR_TURN_SPEED * deltaTime * dir;
-        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-            carYaw -= CAR_TURN_SPEED * deltaTime * dir;
-    }
-
-    // Integrate velocity -> position
-    glm::vec3 forward(
-        std::sin(glm::radians(carYaw)),   // x
-        0.0f,
-        -std::cos(glm::radians(carYaw))   // z
-    );
-    carPos += forward * carSpeed * deltaTime;
-
-    // Simple friction
-    if (carSpeed > 0.0f)
-    {
-        carSpeed -= CAR_FRICTION * deltaTime;
-        if (carSpeed < 0.0f) carSpeed = 0.0f;
-    }
-    else if (carSpeed < 0.0f)
-    {
-        carSpeed += CAR_FRICTION * deltaTime;
-        if (carSpeed > 0.0f) carSpeed = 0.0f;
-    }
-
-    // Keep car and camera on "ground"
-    carPos.y = 0.0f;
-    camera.Position.y = 0.0f; // your Camera::ProcessKeyboard already forces y=0, but this is safe
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)    camera.ProcessKeyboard(JUMP,     deltaTime);
+    
+    // Move car(s) with numpad
+    if (glfwGetKey(window, GLFW_KEY_KP_4) == GLFW_PRESS) carOffset.x -= speed;
+    if (glfwGetKey(window, GLFW_KEY_KP_6) == GLFW_PRESS) carOffset.x += speed;
+    if (glfwGetKey(window, GLFW_KEY_KP_8) == GLFW_PRESS) carOffset.z -= speed;
+    if (glfwGetKey(window, GLFW_KEY_KP_2) == GLFW_PRESS) carOffset.z += speed;
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)

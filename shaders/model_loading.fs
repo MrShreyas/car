@@ -29,7 +29,7 @@ uniform float texture_metallicRoughness1_rot;
 
 // IBL
 uniform samplerCube irradianceMap;
-uniform samplerCube prefilteredMap;
+uniform samplerCube prefiltereMap;
 uniform sampler2D brdfLUT;
 uniform float prefilterMaxMip; // maximum mip level for prefiltered env map
 
@@ -98,7 +98,7 @@ vec3 PrefilteredEnvRadiance(vec3 R, float roughness)
 {
     // sample using roughness * maxMip
     float lod = roughness * prefilterMaxMip;
-    return textureLod(prefilteredMap, R, lod).rgb;
+    return textureLod(prefiltereMap, R, lod).rgb;
 }
 
 void main()
