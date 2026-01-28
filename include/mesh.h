@@ -5,6 +5,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <iostream>
 
 #include <shader.h>
 
@@ -81,29 +82,29 @@ public:
         shader.use();
         // local helper to check GL errors immediately and print context
         auto localGlCheck = [&](const char *where) {
-            GLenum e = glGetError();
-            if (e != GL_NO_ERROR) {
-                GLint curProg = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &curProg);
-                GLint vao = 0; glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
-                GLint ebo = 0; glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ebo);
-                GLint activeTex = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTex);
-                GLint maxTex = 0; glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTex);
-                std::cerr << "[Mesh Debug][GL ERROR] 0x" << std::hex << e << std::dec << " at " << where << "\n";
-                std::cerr << "  shader.ID=" << shader.ID << " GL_CURRENT_PROGRAM=" << curProg << "\n";
-                std::cerr << "  VAO=" << vao << " EBO=" << ebo << " ACTIVE_TEXTURE=0x" << std::hex << activeTex << std::dec << " MAX_TEX=" << maxTex << "\n";
-                int inspect = std::min(maxTex, 8);
-                for (int u = 0; u < inspect; ++u) {
-                    GLenum unit = GL_TEXTURE0 + u;
-                    glActiveTexture(unit);
-                    GLint bound2D = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound2D);
-                    std::cerr << "    Unit " << u << " bound2D=" << bound2D << "\n";
-                }
-                // restore active texture
-                glActiveTexture(activeTex);
-            }
+            // GLenum e = glGetError();
+            // if (e != GL_NO_ERROR) {
+            //     GLint curProg = 0; glGetIntegerv(GL_CURRENT_PROGRAM, &curProg);
+            //     GLint vao = 0; glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+            //     GLint ebo = 0; glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ebo);
+            //     GLint activeTex = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTex);
+            //     GLint maxTex = 0; glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTex);
+            //     std::cerr << "[Mesh Debug][GL ERROR] 0x" << std::hex << e << std::dec << " at " << where << "\n";
+            //     std::cerr << "  shader.ID=" << shader.ID << " GL_CURRENT_PROGRAM=" << curProg << "\n";
+            //     std::cerr << "  VAO=" << vao << " EBO=" << ebo << " ACTIVE_TEXTURE=0x" << std::hex << activeTex << std::dec << " MAX_TEX=" << maxTex << "\n";
+            //     int inspect = std::min(maxTex, 8);
+            //     for (int u = 0; u < inspect; ++u) {
+            //         GLenum unit = GL_TEXTURE0 + u;
+            //         glActiveTexture(unit);
+            //         GLint bound2D = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound2D);
+            //         std::cerr << "    Unit " << u << " bound2D=" << bound2D << "\n";
+            //     }
+            //     // restore active texture
+            //     glActiveTexture(activeTex);
+            // }
         };
         // check immediately after using program
-        localGlCheck("after shader.use()");
+        // localGlCheck("after shader.use()");
         // debug: print current program id
         static bool printedMeshDebug = false;
         // throttle GL error prints to avoid log floods that can hang the host
@@ -113,10 +114,10 @@ public:
         glGetIntegerv(GL_CURRENT_PROGRAM, &curProg);
         // Print pairing of shader.ID and current program once for diagnosis
         if (!printedMeshDebug) {
-            std::cout << "[Mesh Debug] shader.ID=" << shader.ID << " GL_CURRENT_PROGRAM=" << curProg << std::endl;
+            // std::cout << "[Mesh Debug] shader.ID=" << shader.ID << " GL_CURRENT_PROGRAM=" << curProg << std::endl;
             GLint maxTexUnits = 0;
             glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTexUnits);
-            std::cout << "[Mesh Debug] GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS=" << maxTexUnits << std::endl;
+            // std::cout << "[Mesh Debug] GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS=" << maxTexUnits << std::endl;
         }
         // bind appropriate textures
     unsigned int diffuseNr  = 1;
@@ -138,7 +139,7 @@ public:
             const Texture &T = textures[i];
             if (!printedMeshDebug)
             {
-                std::cout << "[Mesh Debug] Consider texture idx=" << i << " type=" << T.type << " path=" << T.path << " id=" << T.id << std::endl;
+                // std::cout << "[Mesh Debug] Consider texture idx=" << i << " type=" << T.type << " path=" << T.path << " id=" << T.id << std::endl;
             }
             if (T.type == "texture_diffuse" && !hasDiffuse)
             {
@@ -217,7 +218,8 @@ public:
         }
 
         // draw mesh
-        if (!printedMeshDebug)
+        static int debugDrawPrints = 0;
+        if (debugDrawPrints < 5)
         {
             std::cout << "[Mesh Debug] About to draw VAO=" << VAO << " indicesCount=" << indices.size() << " EBO bound=" << (EBO != 0) << std::endl;
             GLboolean isVAO = glIsVertexArray(VAO);
@@ -232,15 +234,15 @@ public:
             glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
             localGlCheck("after explicit glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO)");
         } else {
-            std::cerr << "[Mesh Debug] Warning: mesh EBO is 0 for VAO=" << VAO << "\n";
+            // std::cerr << "[Mesh Debug] Warning: mesh EBO is 0 for VAO=" << VAO << "\n";
         }
         glDrawElements(GL_TRIANGLES, static_cast<unsigned int>(indices.size()), GL_UNSIGNED_INT, 0);
         localGlCheck("after glDrawElements");
-        if (!printedMeshDebug)
+        if (debugDrawPrints < 5)
         {
             GLint errAfter = glGetError();
             std::cout << "[Mesh Debug] glGetError after draw: 0x" << std::hex << errAfter << std::dec << std::endl;
-            printedMeshDebug = true;
+            debugDrawPrints++;
         }
         glBindVertexArray(0);
 

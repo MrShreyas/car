@@ -1,9 +1,29 @@
-g++ main.cpp src/tiny_gltf_impl.cpp src/glad.c -o main.exe -Iinclude -Llib -lglfw3 -lopengl32 -lgdi32 -ldwmapi
-no need to run above command
+Build and Run Instructions
+==========================
 
-mkdir build
-cd build
-cmake -G "MinGW Makefiles" ..
-cmake --build .
+Prerequisites:
+- CMake
+- MinGW (or another C++ compiler)
+- Dependencies (GLFW, Assimp) installed and configured in CMakeLists.txt
 
-cmake --build . --clean-first
+Building with CMake:
+1. Create a build directory:
+   mkdir build
+   cd build
+
+2. Generate Makefiles:
+   cmake -G "MinGW Makefiles" ..
+
+3. Build the project:
+   cmake --build .
+   cmake --build . --clean-first // optional 
+
+Running the Application:
+   ./main.exe
+
+Note:
+The application expects assets (models, shaders, textures) at specific absolute paths. 
+Ensure these files exist at:
+- c:/development/car/shaders/
+- c:/development/car/models/
+- c:/development/car/river_alcove_1k.exr

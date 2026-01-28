@@ -29,13 +29,14 @@ uniform float texture_metallicRoughness1_rot;
 
 // IBL
 uniform samplerCube irradianceMap;
-uniform samplerCube prefiltereMap;
+uniform samplerCube prefilterMap;
 uniform sampler2D brdfLUT;
 uniform float prefilterMaxMip; // maximum mip level for prefiltered env map
 
 // extra factors provided by CPU
 uniform float metallicFactor;
 uniform float roughnessFactor;
+uniform float materialTransparency;
 
 // apply a simple UV transform: offset + R(scale * uv)
 vec2 applyUV(vec2 uv, vec4 uvparams, float rot)
@@ -98,7 +99,7 @@ vec3 PrefilteredEnvRadiance(vec3 R, float roughness)
 {
     // sample using roughness * maxMip
     float lod = roughness * prefilterMaxMip;
-    return textureLod(prefiltereMap, R, lod).rgb;
+    return textureLod(prefilterMap, R, lod).rgb;
 }
 
 void main()
@@ -143,7 +144,8 @@ void main()
     F0 = mix(F0, baseColor, metallic);
 
     // direct lighting: sample a single directional light for simple direct specular
-    vec3 L = normalize(vec3(-0.2, -1.0, -0.3));
+    // Light coming from top-right-front
+    vec3 L = normalize(vec3(0.5, 1.0, 0.3));
     vec3 H = normalize(V + L);
 
     float NDF = DistributionGGX(N, H, roughness);
@@ -175,8 +177,12 @@ void main()
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0/2.2));
 
-    if (alpha < 0.01)
-        discard;
+    // Apply fade-in transparency
+    alpha *= (1.0 - materialTransparency);
+
+    // if (alpha < 0.01)
+    //    discard;
 
     FragColor = vec4(color, alpha);
+    // FragColor = vec4(1.0, 0.0, 0.0, 1.0); // DEBUG: FORCE RED
 }

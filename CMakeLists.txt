@@ -1,16 +1,17 @@
 cmake_minimum_required(VERSION 3.10)
 project(CarViewer)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Assimp paths ---
-set(ASSIMP_INCLUDE_DIR "C:/development/assimp/installed/include")
-set(ASSIMP_LIB_DIR "C:/development/assimp/installed/lib")
+set(ASSIMP_INCLUDE_DIR "C:/Users/katal/OneDrive/Desktop/development/assimp/installed/include")
+set(ASSIMP_LIB_DIR "C:/Users/katal/OneDrive/Desktop/development/assimp/installed/lib")
 
 include_directories(${ASSIMP_INCLUDE_DIR})
 link_directories(${ASSIMP_LIB_DIR})
 
-add_executable(main main.cpp src/glad.c src/tiny_gltf_impl.cpp)
+add_executable(main main.cpp src/glad.c src/tiny_gltf_impl.cpp src/Shader.cpp src/Camera.cpp src/Application.cpp src/CarDemo.cpp src/model.cpp)
 target_include_directories(main PRIVATE include ${CMAKE_SOURCE_DIR}/src)
 
 # Link libraries
