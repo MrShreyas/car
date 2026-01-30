@@ -43,8 +43,6 @@ void Camera::ProcessKeyboard(Camera_Movement direction, float deltaTime)
             OnGround = false;
         }
     }
-    
-    Position.y = 0.0f; // This was clamping the camera to the ground, causing it to be inside models.
 }
 
 void Camera::ProcessMouseMovement(float xoffset, float yoffset, GLboolean constrainPitch)
@@ -75,7 +73,7 @@ void Camera::ProcessMouseScroll(float yoffset)
         Zoom = 45.0f;
 }
 
-void Camera::Update(float deltaTime)
+void Camera::Update(float deltaTime, float groundHeight)
 {
     // apply gravity
     if (!OnGround)
@@ -84,9 +82,9 @@ void Camera::Update(float deltaTime)
         Position.y += VerticalVelocity * deltaTime;
 
         // hit the ground
-        if (Position.y <= 0.0f)
+        if (Position.y <= groundHeight)
         {
-            Position.y = 0.0f;
+            Position.y = groundHeight;
             VerticalVelocity = 0.0f;
             OnGround = true;
         }

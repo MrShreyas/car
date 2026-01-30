@@ -18,7 +18,7 @@ enum Camera_Movement
 // Default camera values
 const float YAW = -90.0f;
 const float PITCH = 0.0f;
-const float SPEED = 2.5f;
+const float SPEED = 10.5f;
 const float SENSITIVITY = 0.1f;
 const float ZOOM = 45.0f;
 const float GRAVITY    = 9.8f;
@@ -62,7 +62,7 @@ public:
     // processes input received from a mouse scroll-wheel event
     void ProcessMouseScroll(float yoffset);
     
-    void Update(float deltaTime);
+    void Update(float deltaTime, float groundHeight);
 
 private:
     // calculates the front vector from the Camera's (updated) Euler Angles

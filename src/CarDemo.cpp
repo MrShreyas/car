@@ -18,6 +18,7 @@ CarDemo::CarDemo(const std::string& title, int width, int height)
       m_RaptorModel(nullptr),
       m_CarModel(nullptr),
       m_CarModel2(nullptr),
+      m_RoadModel(nullptr),
       m_CarPos(10.0f, 0.0f, 0.0f),
       m_CarYaw(0.0f),
       m_CarSpeed(0.0f),
@@ -35,6 +36,7 @@ CarDemo::~CarDemo()
     delete m_RaptorModel;
     delete m_CarModel;
     delete m_CarModel2;
+    delete m_RoadModel;
 }
 
 void CarDemo::OnInit()
@@ -44,7 +46,7 @@ void CarDemo::OnInit()
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
     // Initialize Camera
-    m_Camera = new Camera(glm::vec3(0.0f, 2.0f, 0.0f));
+    m_Camera = new Camera(glm::vec3(0.0f, 0.0f, 4.0f));
 
     // Initialize Shaders
     m_Shader = new Shader("C:/Users/katal/OneDrive/Desktop/development/car/shaders/model_loading.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/model_loading.fs");
@@ -61,13 +63,87 @@ void CarDemo::OnInit()
     m_RaptorModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/ford_raptor/scene.gltf");
     m_CarModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/2024_ford_shelby_super_snake_s650/scene.gltf");
     m_CarModel2 = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/2024_ford_shelby_super_snake_s650/scene.gltf");
+    m_RoadModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/city_base_road/scene.gltf");
 
     // Place models
+    placeModel(*m_RoadModel, glm::vec3(0.0f, 0.0f, 0.0f), 0.0f, 5.0f, false);
     placeModel(*m_RaptorModel, glm::vec3(0.0f, 0.0f, 0.0f), -1.0f, 1.5f, false);
     placeModel(*m_CarModel, glm::vec3(5.0f, 0.0f, 0.0f), -1.0f, 1.5f, false);
     placeModel(*m_CarModel2, glm::vec3(0.0f, 0.0f, 0.0f), -1.0f, 1.5f, true);
 
     m_StartTime = static_cast<float>(glfwGetTime());
+}
+
+float CarDemo::getTerrainHeight(float x, float z)
+{
+    if (!m_RoadModel) {
+        return 0.0f;
+    }
+
+    glm::vec3 rayOrigin(x, 1000.0f, z);
+    glm::vec3 rayDir(0.0f, -1.0f, 0.0f);
+    float maxHeight = -1000.0f;
+    bool found = false;
+
+    for (const auto& placedModel : m_PlacedModels)
+    {
+        if (placedModel.model == m_RoadModel)
+        {
+            for (const auto& mesh : placedModel.model->meshes)
+            {
+                for (size_t i = 0; i < mesh.indices.size(); i += 3)
+                {
+                    glm::vec3 v0 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i]].Position, 1.0f);
+                    glm::vec3 v1 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i+1]].Position, 1.0f);
+                    glm::vec3 v2 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i+2]].Position, 1.0f);
+
+                    float t = 0.0f;
+                    if (rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, t))
+                    {
+                        float intersectionHeight = rayOrigin.y - t;
+                        if (intersectionHeight > maxHeight)
+                        {
+                            maxHeight = intersectionHeight;
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return found ? maxHeight : 0.0f;
+}
+
+bool CarDemo::rayTriangleIntersect(
+    const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+    float& t)
+{
+    glm::vec3 e1 = v1 - v0;
+    glm::vec3 e2 = v2 - v0;
+    glm::vec3 pvec = glm::cross(rayDir, e2);
+    float det = glm::dot(e1, pvec);
+
+    if (det > -1e-8 && det < 1e-8) {
+        return false;
+    }
+
+    float invDet = 1.0f / det;
+    glm::vec3 tvec = rayOrigin - v0;
+    float u = glm::dot(tvec, pvec) * invDet;
+    if (u < 0.0f || u > 1.0f) {
+        return false;
+    }
+
+    glm::vec3 qvec = glm::cross(tvec, e1);
+    float v = glm::dot(rayDir, qvec) * invDet;
+    if (v < 0.0f || u + v > 1.0f) {
+        return false;
+    }
+
+    t = glm::dot(e2, qvec) * invDet;
+    return t > 1e-8;
 }
 
 void CarDemo::OnUpdate(float deltaTime)
@@ -76,8 +152,9 @@ void CarDemo::OnUpdate(float deltaTime)
     // In main.cpp, car physics was in processInput, which is called every frame.
     // So we'll keep it there or here. 
     // Application::Run calls OnProcessInput then OnUpdate.
-    m_Camera->Update(deltaTime);
-
+    float roadHeight = getTerrainHeight(m_Camera->Position.x, m_Camera->Position.z);
+    m_Camera->Update(deltaTime, roadHeight + 1.0f); // add a small offset to avoid being inside the road
+    m_Camera->Position.y = roadHeight + 1.0f; // Force camera to stick to ground
     
     // I'll leave car physics in OnProcessInput to match main.cpp structure where input directly affects state
 }
@@ -176,10 +253,18 @@ void CarDemo::OnRender()
     }
 }
 
+bool isPointInAABB(const glm::vec3& point, const glm::vec3& min, const glm::vec3& max) {
+    return (point.x >= min.x && point.x <= max.x) &&
+           (point.y >= min.y && point.y <= max.y) &&
+           (point.z >= min.z && point.z <= max.z);
+}
+
 void CarDemo::OnProcessInput(float deltaTime)
 {
     if (glfwGetKey(m_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(m_Window, true);
+
+    glm::vec3 oldPos = m_Camera->Position;
 
     // Camera movement
     if (glfwGetKey(m_Window, GLFW_KEY_W) == GLFW_PRESS) m_Camera->ProcessKeyboard(FORWARD, deltaTime);
@@ -187,6 +272,16 @@ void CarDemo::OnProcessInput(float deltaTime)
     if (glfwGetKey(m_Window, GLFW_KEY_A) == GLFW_PRESS) m_Camera->ProcessKeyboard(LEFT, deltaTime);
     if (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS) m_Camera->ProcessKeyboard(RIGHT, deltaTime);
     if (glfwGetKey(m_Window, GLFW_KEY_SPACE) == GLFW_PRESS) m_Camera->ProcessKeyboard(JUMP, deltaTime);
+
+    for (const auto& pm : m_PlacedModels)
+    {
+        if (pm.model != m_RoadModel && isPointInAABB(m_Camera->Position, pm.bboxMin, pm.bboxMax))
+        {
+            m_Camera->Position = oldPos;
+            break;
+        }
+    }
+
 
     // Car driving
     if (glfwGetKey(m_Window, GLFW_KEY_UP) == GLFW_PRESS)

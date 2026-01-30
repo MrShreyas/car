@@ -41,6 +41,7 @@ private:
     Model* m_RaptorModel;
     Model* m_CarModel;
     Model* m_CarModel2;
+    Model* m_RoadModel;
     
     std::vector<PlacedModel> m_PlacedModels;
 
@@ -81,6 +82,13 @@ private:
     unsigned int cubeVBO = 0;
     unsigned int quadVAO = 0;
     unsigned int quadVBO = 0;
+
+    bool rayTriangleIntersect(
+        const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+        const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+        float& t);
+        
+    float getTerrainHeight(float x, float z);
 };
 
 #endif
