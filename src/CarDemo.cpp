@@ -11,6 +11,8 @@
 #include "tinyexr.h"
 #endif
 
+#include <ResourceManager.h>
+
 CarDemo::CarDemo(const std::string& title, int width, int height)
     : Application(title, width, height),
       m_Camera(nullptr),
@@ -19,24 +21,30 @@ CarDemo::CarDemo(const std::string& title, int width, int height)
       m_CarModel(nullptr),
       m_CarModel2(nullptr),
       m_RoadModel(nullptr),
-      m_CarPos(10.0f, 0.0f, 0.0f),
-      m_CarYaw(0.0f),
-      m_CarSpeed(0.0f),
-      m_LastX(width / 2.0f),
-      m_LastY(height / 2.0f),
       m_FirstMouse(true),
-      m_StartTime(0.0f)
+      m_StartTime(0.0f),
+
+      m_PlayerVehicle(nullptr),
+      m_EnterPressed(false)
 {
 }
 
 CarDemo::~CarDemo()
 {
     delete m_Camera;
-    delete m_Shader;
-    delete m_RaptorModel;
-    delete m_CarModel;
-    delete m_CarModel2;
-    delete m_RoadModel;
+    
+    // Clean up vehicles
+    for (auto v : m_Vehicles) {
+        delete v;
+    }
+    m_Vehicles.clear();
+    
+    // Resources are managed by ResourceManager
+    // delete m_Shader;
+    // delete m_RaptorModel;
+    // delete m_CarModel;
+    // delete m_CarModel2;
+    // delete m_RoadModel;
 }
 
 void CarDemo::OnInit()
@@ -49,10 +57,16 @@ void CarDemo::OnInit()
     m_Camera = new Camera(glm::vec3(0.0f, 0.0f, 4.0f));
 
     // Initialize Shaders
-    m_Shader = new Shader("C:/Users/katal/OneDrive/Desktop/development/car/shaders/model_loading.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/model_loading.fs");
+    m_Shader = ResourceManager::LoadShader("shaders/model_loading.vs", "shaders/model_loading.fs", "modelShader");
+    m_ParticleShader = ResourceManager::LoadShader("shaders/particles.vs", "shaders/particles.fs", "particleShader");
+    
+    m_Particles = new ParticleSystem(m_ParticleShader);
+    
+    // Enable Point Size control
+    glEnable(GL_PROGRAM_POINT_SIZE);
 
     // Initialize IBL
-    initIBLFromEXR("C:/Users/katal/OneDrive/Desktop/development/car/river_alcove_1k.exr");
+    initIBLFromEXR("river_alcove_1k.exr");
     
     if (m_EnvCubemap == 0)
     {
@@ -60,54 +74,168 @@ void CarDemo::OnInit()
     }
 
     // Initialize Models
-    m_RaptorModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/ford_raptor/scene.gltf");
-    m_CarModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/2024_ford_shelby_super_snake_s650/scene.gltf");
-    m_CarModel2 = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/2024_ford_shelby_super_snake_s650/scene.gltf");
-    m_RoadModel = new Model("C:/Users/katal/OneDrive/Desktop/development/car/models/city_base_road/scene.gltf");
+    // Use the new single-file GLBs if available, falling back to folders if not
+    // The ResourceManager handles paths relative to execution or 'models/' prefix depending on impl.
+    // Assuming user put raptor.glb in 'models/raptor.glb'
+    // GLB usually needs flipUV=false to map textures correctly
+    m_RaptorModel = ResourceManager::LoadModel("models/ford-raptor/source/FordRaptor.glb", "raptor", false);
+    m_RaptorModel2 = ResourceManager::LoadModel("models/ford-raptor/source/FordRaptor.glb", "raptor", false);
+    
+    // Check if user has a shelby glb too? If not keep old one for now.
+    // If the Shelby is GLTF, it might also need false, but if it was working before (with global true), keep it true?
+    // User said "all the textures are not loading properly" for the CAR before. So maybe switch car to false too if it's GLTF.
+    // But Road definitely needs TRUE (Default).
+    // m_CarModel = ResourceManager::LoadModel("models/shelby/ford_shelby.glb", "car", false);
+    // m_CarModel2 = ResourceManager::LoadModel("models/shelby/ford_shelby.glb", "car", false); 
+    // 2024_ford_shelby_super_snake_s650/scene.gltf
+    // Road needs FlipUV = true (Default)
+    m_RoadModel = ResourceManager::LoadModel("models/city_base_road/scene.gltf", "road", true);
 
     // Place models
+    // Place models (Static)
+    // Road
     placeModel(*m_RoadModel, glm::vec3(0.0f, 0.0f, 0.0f), 0.0f, 5.0f, false);
-    placeModel(*m_RaptorModel, glm::vec3(0.0f, 0.0f, 0.0f), -1.0f, 1.5f, false);
-    placeModel(*m_CarModel, glm::vec3(5.0f, 0.0f, 0.0f), -1.0f, 1.5f, false);
-    placeModel(*m_CarModel2, glm::vec3(0.0f, 0.0f, 0.0f), -1.0f, 1.5f, true);
+    
+    // Build the terrain grid for fast collision BEFORE spawning vehicles
+    buildTerrainGrid();
+    
+    // Define Stats
+    VehicleStats raptorStats;
+    raptorStats.name = "Raptor Offroad";
+    raptorStats.maxSpeed = 30.0f;       // Slower top speed
+    raptorStats.acceleration = 5.0f;   // High torque
+    raptorStats.turnSpeed = 100.0f;      // Heavy handling
+    raptorStats.friction = 8.0f;        // Tires grip well offroad
+    raptorStats.mass = 2500.0f;
+
+    VehicleStats mustangStats;
+    mustangStats.name = "Shelby GT500";
+    mustangStats.maxSpeed = 100.0f;     // Fast 
+    mustangStats.acceleration = 20.0f;  // Balanced
+    mustangStats.turnSpeed = 90.0f;     // Sharp
+    mustangStats.friction = 4.0f;       // Drifts easier
+    mustangStats.mass = 1600.0f;
+
+    // Spawn Vehicles (Dynamic)
+    // Raptor 1 (at origin)
+    // spawnVehicle(m_RaptorModel2, glm::vec3(-5.0f, 0.0f, 0.0f), raptorStats); // Raptor Left
+    spawnVehicle(m_RaptorModel, glm::vec3(0.0f, 0.0f, 0.0f), raptorStats);   // Raptor Center
+    // spawnVehicle(m_CarModel, glm::vec3(5.0f, 0.0f, 0.0f), mustangStats);      // Mustang Right
+    
+    // Original "Player" car
+    // spawnVehicle(m_CarModel2, glm::vec3(10.0f, 0.0f, 0.0f), mustangStats);
 
     m_StartTime = static_cast<float>(glfwGetTime());
 }
 
+void CarDemo::buildTerrainGrid()
+{
+    // 1. Setup grid dimensions
+    m_CellSizeX = m_WorldSizeX / GRID_RESOLUTION;
+    m_CellSizeZ = m_WorldSizeZ / GRID_RESOLUTION;
+    m_TerrainGrid.clear();
+    m_TerrainGrid.resize(GRID_RESOLUTION * GRID_RESOLUTION);
+
+    std::cout << "[Grid] Building Terrain Grid... Resolution: " << GRID_RESOLUTION << " Sizes: " << m_CellSizeX << ", " << m_CellSizeZ << "\n";
+
+    // 2. Iterate all static objects (Roads) and add their triangles
+    // 2. Iterate all static objects (Roads) and add their triangles
+    for (const auto& placedModel : m_PlacedModels)
+    {
+        // Only include the static road/terrain for now
+        if (placedModel.model == m_RoadModel) 
+        {
+            // Use Traverse to get world-space meshes
+            // But we need to combine with placedModel.baseModelMatrix
+            glm::mat4 base = placedModel.baseModelMatrix;
+            
+            placedModel.model->Traverse([&](const Mesh& mesh, const glm::mat4& nodeGlobalTransform) {
+                // Final transform = base * nodeGlobal
+                glm::mat4 finalTransform = base * nodeGlobalTransform;
+                
+                for (size_t i = 0; i < mesh.indices.size(); i += 3)
+                {
+                    glm::vec3 v0 = glm::vec3(finalTransform * glm::vec4(mesh.vertices[mesh.indices[i]].Position, 1.0f));
+                    glm::vec3 v1 = glm::vec3(finalTransform * glm::vec4(mesh.vertices[mesh.indices[i+1]].Position, 1.0f));
+                    glm::vec3 v2 = glm::vec3(finalTransform * glm::vec4(mesh.vertices[mesh.indices[i+2]].Position, 1.0f));
+
+                    addTriangleToGrid(v0, v1, v2);
+                }
+            });
+        }
+    }
+    
+    // Debug stats
+    size_t totalTris = 0;
+    size_t maxTris = 0;
+    for(const auto& cell : m_TerrainGrid) {
+        totalTris += cell.size();
+        if(cell.size() > maxTris) maxTris = cell.size();
+    }
+    std::cout << "[Grid] Built. Average Tris/Cell: " << (totalTris / (float)m_TerrainGrid.size()) 
+              << " Max Tris/Cell: " << maxTris << "\n";
+}
+
+void CarDemo::addTriangleToGrid(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2)
+{
+    // Compute AABB of triangle
+    float minX = std::min({v0.x, v1.x, v2.x});
+    float maxX = std::max({v0.x, v1.x, v2.x});
+    float minZ = std::min({v0.z, v1.z, v2.z});
+    float maxZ = std::max({v0.z, v1.z, v2.z});
+
+    // Convert to grid coordinates
+    int minXIndex = static_cast<int>((minX - m_WorldMinX) / m_CellSizeX);
+    int maxXIndex = static_cast<int>((maxX - m_WorldMinX) / m_CellSizeX);
+    int minZIndex = static_cast<int>((minZ - m_WorldMinZ) / m_CellSizeZ);
+    int maxZIndex = static_cast<int>((maxZ - m_WorldMinZ) / m_CellSizeZ);
+
+    // Clamp to grid bounds
+    minXIndex = std::max(0, std::min(GRID_RESOLUTION - 1, minXIndex));
+    maxXIndex = std::max(0, std::min(GRID_RESOLUTION - 1, maxXIndex));
+    minZIndex = std::max(0, std::min(GRID_RESOLUTION - 1, minZIndex));
+    maxZIndex = std::max(0, std::min(GRID_RESOLUTION - 1, maxZIndex));
+
+    // Add to all overlapping cells
+    for (int z = minZIndex; z <= maxZIndex; ++z) {
+        for (int x = minXIndex; x <= maxXIndex; ++x) {
+            m_TerrainGrid[z * GRID_RESOLUTION + x].push_back({v0, v1, v2});
+        }
+    }
+}
+
 float CarDemo::getTerrainHeight(float x, float z)
 {
-    if (!m_RoadModel) {
-        return 0.0f;
+    // 1. Calculate grid index
+    int gridX = static_cast<int>((x - m_WorldMinX) / m_CellSizeX);
+    int gridZ = static_cast<int>((z - m_WorldMinZ) / m_CellSizeZ);
+
+    // 2. Check bounds
+    if (gridX < 0 || gridX >= GRID_RESOLUTION || gridZ < 0 || gridZ >= GRID_RESOLUTION) {
+        return 0.0f; // Off grid
     }
 
+    // 3. Ray cast against triangles in this cell
+    const auto& triangles = m_TerrainGrid[gridZ * GRID_RESOLUTION + gridX];
+    
     glm::vec3 rayOrigin(x, 1000.0f, z);
     glm::vec3 rayDir(0.0f, -1.0f, 0.0f);
     float maxHeight = -1000.0f;
     bool found = false;
 
-    for (const auto& placedModel : m_PlacedModels)
-    {
-        if (placedModel.model == m_RoadModel)
-        {
-            for (const auto& mesh : placedModel.model->meshes)
-            {
-                for (size_t i = 0; i < mesh.indices.size(); i += 3)
-                {
-                    glm::vec3 v0 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i]].Position, 1.0f);
-                    glm::vec3 v1 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i+1]].Position, 1.0f);
-                    glm::vec3 v2 = placedModel.baseModelMatrix * glm::vec4(mesh.vertices[mesh.indices[i+2]].Position, 1.0f);
+    // Optimization check: if no triangles, early out
+    if (triangles.empty()) return 0.0f;
 
-                    float t = 0.0f;
-                    if (rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, t))
-                    {
-                        float intersectionHeight = rayOrigin.y - t;
-                        if (intersectionHeight > maxHeight)
-                        {
-                            maxHeight = intersectionHeight;
-                            found = true;
-                        }
-                    }
-                }
+    for (const auto& tri : triangles)
+    {
+        float t = 0.0f;
+        if (rayTriangleIntersect(rayOrigin, rayDir, tri.v0, tri.v1, tri.v2, t))
+        {
+            float intersectionHeight = rayOrigin.y - t;
+            if (intersectionHeight > maxHeight)
+            {
+                maxHeight = intersectionHeight;
+                found = true;
             }
         }
     }
@@ -148,15 +276,49 @@ bool CarDemo::rayTriangleIntersect(
 
 void CarDemo::OnUpdate(float deltaTime)
 {
-    // Physics / Game Logic moved to OnProcessInput or here
-    // In main.cpp, car physics was in processInput, which is called every frame.
-    // So we'll keep it there or here. 
-    // Application::Run calls OnProcessInput then OnUpdate.
-    float roadHeight = getTerrainHeight(m_Camera->Position.x, m_Camera->Position.z);
-    m_Camera->Update(deltaTime, roadHeight + 1.0f); // add a small offset to avoid being inside the road
-    m_Camera->Position.y = roadHeight + 1.0f; // Force camera to stick to ground
-    
-    // I'll leave car physics in OnProcessInput to match main.cpp structure where input directly affects state
+    // Physics is currently in OnProcessInput.
+    // Here we handle Camera updates (TPP vs Free).
+
+    if (m_PlayerVehicle)
+    {
+        // TPP Camera Logic
+        glm::vec3 carPos = m_PlayerVehicle->GetPosition();
+        glm::vec3 forward = m_PlayerVehicle->GetForwardVector();
+        
+        // 1. Calculate Target Position (Behind and Above)
+        // Ensure "Behind" means opposite to forward vector.
+        float distance = 7.0f;
+        float height = 3.5f;
+        
+        // We subtract forward to go behind (Standard OpenGL: Forward is -Z)
+        // If car is moving Forward, camera should be at Pos - Forward*Dist
+        // But let's check our vector math in Vehicle.cpp
+        // "forward = (sin(yaw), 0, -cos(yaw))" -> This is standard -Z forward.
+        // So `Pos - Forward` is Behind.
+        
+        glm::vec3 targetPos = carPos - (forward * distance) + glm::vec3(0.0f, height, 0.0f);
+
+        // 2. Smooth Interpolation
+        // Use a spring-like dampening or simple mix
+        float lerpSpeed = 5.0f;
+        m_Camera->Position = glm::mix(m_Camera->Position, targetPos, lerpSpeed * deltaTime);
+        
+        // 3. Look At
+        // Camera should look at the car (plus offset)
+        glm::vec3 lookTarget = m_PlayerVehicle->GetCameraTarget();
+        m_Camera->Front = glm::normalize(lookTarget - m_Camera->Position);
+        
+        // 4. Update Vectors
+        m_Camera->Right = glm::normalize(glm::cross(m_Camera->Front, m_Camera->WorldUp));
+        m_Camera->Up    = glm::normalize(glm::cross(m_Camera->Right, m_Camera->Front));
+    }
+    else
+    {
+        // Free Cam (Walking)
+        // Terrain following logic handled in OnProcessInput mostly, providing collisions.
+        // Just ensure we don't clip through ground here too?
+        // Input handles movement.
+    }
 }
 
 void CarDemo::OnRender()
@@ -237,20 +399,75 @@ void CarDemo::OnRender()
     m_Shader->setFloat("prefilterMaxMip", m_PrefilterMaxMip);
     m_Shader->setFloat("materialTransparency", transparency);
 
+    // Draw static models (Roads)
     for (const auto &pm : m_PlacedModels)
     {
-        glm::mat4 finalModel = pm.baseModelMatrix;
-        if (pm.movable && pm.model == m_CarModel2)
-        {
-            glm::mat4 dyn = glm::mat4(1.0f);
-            dyn = glm::translate(dyn, m_CarPos);
-            dyn = glm::rotate(dyn, glm::radians(m_CarYaw), glm::vec3(0.0f, 1.0f, 0.0f));
-            finalModel = dyn * pm.baseModelMatrix;
-        }
-
-        m_Shader->setMat4("model", finalModel);
-        pm.model->Draw(*m_Shader, finalModel, m_Camera->Position);
+        // Skip movable logic here, they are Vehicles now (mostly)
+        // If we kept 'movable' flag usage in PlacedModel, check it
+        if (pm.movable) continue; 
+        
+        m_Shader->setMat4("model", pm.baseModelMatrix);
+        pm.model->Draw(*m_Shader, pm.baseModelMatrix, m_Camera->Position);
     }
+    
+    // Draw Vehicles
+    for (auto v : m_Vehicles)
+    {
+        v->Draw(*m_Shader, view, projection, m_Camera->Position);
+    }
+    
+    // Draw Particles
+    if (m_Particles) {
+        m_Particles->Draw(view, projection, m_Camera->Position);
+    }
+    
+    // Draw UI (Crosshair)
+    renderCrosshair();
+}
+
+void CarDemo::renderCrosshair()
+{
+    // Simple fixed pipeline-style render (or reuse a simple shader if needed)
+    // For now, simpler to just clear depth and draw a tiny quad in center if we have a shader, 
+    // but we need a simple 2D shader. 
+    // Actually, let's use the quadVAO and an identity projection?
+    // Not critical for logic, let's rely on print "Press Enter" for now if rendering is complex without a UI shader.
+    // We'll skip complex UI rendering to avoid breaking the build with missing shaders.
+}
+
+bool CarDemo::checkVehicleEntry() 
+{
+    if (m_PlayerVehicle) return false; // Already in car
+
+    // Find closest vehicle
+    Vehicle* closest = nullptr;
+    float minDst = 5.0f; // range
+
+    for (auto v : m_Vehicles) {
+        float dst = glm::distance(m_Camera->Position, v->GetPosition());
+        if (dst < minDst) {
+            minDst = dst;
+            closest = v;
+        }
+    }
+
+    if (closest) {
+        m_PlayerVehicle = closest;
+        std::cout << "Entered Vehicle: " << closest->GetStats().name << "\n";
+        return true;
+    }
+
+    return false;
+}
+
+void CarDemo::spawnVehicle(Model* model, glm::vec3 pos, const VehicleStats& stats)
+{
+    // Auto-snap to terrain
+    float h = getTerrainHeight(pos.x, pos.z);
+    pos.y = h;
+    
+    Vehicle* v = new Vehicle(model, pos, stats);
+    m_Vehicles.push_back(v);
 }
 
 bool isPointInAABB(const glm::vec3& point, const glm::vec3& min, const glm::vec3& max) {
@@ -261,59 +478,79 @@ bool isPointInAABB(const glm::vec3& point, const glm::vec3& min, const glm::vec3
 
 void CarDemo::OnProcessInput(float deltaTime)
 {
-    if (glfwGetKey(m_Window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(m_Window, true);
+// --- REFACTORED INPUT ---
 
-    glm::vec3 oldPos = m_Camera->Position;
+    // Toggle Enter Key
+    if (glfwGetKey(m_Window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+        if (!m_EnterPressed) {
+            m_EnterPressed = true;
+            if (m_PlayerVehicle) {
+                // Exit Vehicle
+                glm::vec3 exitPos = m_PlayerVehicle->GetPosition() + glm::vec3(-3.0f, 0.0f, 0.0f);
+                m_Camera->Position = glm::vec3(exitPos.x, getTerrainHeight(exitPos.x, exitPos.z) + 1.8f, exitPos.z);
+                m_PlayerVehicle = nullptr;
+                std::cout << "Exited Vehicle.\n";
+            } else {
+                // Try Enter Vehicle
+                checkVehicleEntry();
+            }
+        }
+    } else {
+        m_EnterPressed = false;
+    }
 
-    // Camera movement
-    if (glfwGetKey(m_Window, GLFW_KEY_W) == GLFW_PRESS) m_Camera->ProcessKeyboard(FORWARD, deltaTime);
-    if (glfwGetKey(m_Window, GLFW_KEY_S) == GLFW_PRESS) m_Camera->ProcessKeyboard(BACKWARD, deltaTime);
-    if (glfwGetKey(m_Window, GLFW_KEY_A) == GLFW_PRESS) m_Camera->ProcessKeyboard(LEFT, deltaTime);
-    if (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS) m_Camera->ProcessKeyboard(RIGHT, deltaTime);
-    if (glfwGetKey(m_Window, GLFW_KEY_SPACE) == GLFW_PRESS) m_Camera->ProcessKeyboard(JUMP, deltaTime);
-
-    for (const auto& pm : m_PlacedModels)
+    if (m_PlayerVehicle)
     {
-        if (pm.model != m_RoadModel && isPointInAABB(m_Camera->Position, pm.bboxMin, pm.bboxMax))
-        {
-            m_Camera->Position = oldPos;
-            break;
+        // --- DRIVING MODE ---
+        // Pass Input to Vehicle Class
+        bool accel = (glfwGetKey(m_Window, GLFW_KEY_UP) == GLFW_PRESS) || (glfwGetKey(m_Window, GLFW_KEY_W) == GLFW_PRESS);
+        bool brake = (glfwGetKey(m_Window, GLFW_KEY_DOWN) == GLFW_PRESS) || (glfwGetKey(m_Window, GLFW_KEY_S) == GLFW_PRESS);
+        bool left  = (glfwGetKey(m_Window, GLFW_KEY_LEFT) == GLFW_PRESS) || (glfwGetKey(m_Window, GLFW_KEY_A) == GLFW_PRESS);
+        bool right = (glfwGetKey(m_Window, GLFW_KEY_RIGHT) == GLFW_PRESS) || (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS);
+
+        // Update Vehicle Physics
+        m_PlayerVehicle->HandleInput(accel, brake, left, right, deltaTime);
+        
+    // Update Physics for ALL vehicles (Gravity/Collision)
+    for (auto v : m_Vehicles) {
+        glm::vec3 pos = v->GetPosition();
+        float h = getTerrainHeight(pos.x, pos.z);
+        // If it's the player, we already handled input.
+        // UpdatePhysics integrates velocity and applies gravity.
+        v->UpdatePhysics(deltaTime, h);
+        v->UpdatePhysics(deltaTime, h);
+    }
+    
+    // Emit Particles contextually
+    if (m_PlayerVehicle) {
+        // If speed is high or turning sharp, emit smoke
+        // Simple heuristic: if |speed| > 10
+        if (std::abs(m_PlayerVehicle->GetSpeed()) > 5.0f) {
+            glm::vec3 pos = m_PlayerVehicle->GetPosition();
+            glm::vec3 forward = m_PlayerVehicle->GetForwardVector();
+            glm::vec3 offset = -forward * 2.0f; // Behind car
+            // Emit 2 smoke puffs (wheels)
+            m_Particles->Emit(pos + offset + glm::vec3(0.8f, 0.2f, 0.0f), glm::vec3(0.0f), glm::vec4(0.8f, 0.8f, 0.8f, 0.5f), 1.0f);
+            m_Particles->Emit(pos + offset + glm::vec3(-0.8f, 0.2f, 0.0f), glm::vec3(0.0f), glm::vec4(0.8f, 0.8f, 0.8f, 0.5f), 1.0f);
         }
     }
-
-
-    // Car driving
-    if (glfwGetKey(m_Window, GLFW_KEY_UP) == GLFW_PRESS)
-        m_CarSpeed += CAR_ACCEL * deltaTime;
-    if (glfwGetKey(m_Window, GLFW_KEY_DOWN) == GLFW_PRESS)
-        m_CarSpeed -= CAR_ACCEL * deltaTime;
-
-    if (std::fabs(m_CarSpeed) > 0.01f)
-    {
-        float dir = (m_CarSpeed > 0.0f) ? 1.0f : -1.0f;
-        if (glfwGetKey(m_Window, GLFW_KEY_LEFT) == GLFW_PRESS)
-            m_CarYaw += CAR_TURN_SPEED * deltaTime * dir;
-        if (glfwGetKey(m_Window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-            m_CarYaw -= CAR_TURN_SPEED * deltaTime * dir;
+    
+    m_Particles->Update(deltaTime);
     }
-
-    glm::vec3 forward(std::sin(glm::radians(m_CarYaw)), 0.0f, -std::cos(glm::radians(m_CarYaw)));
-    m_CarPos += forward * m_CarSpeed * deltaTime;
-
-    if (m_CarSpeed > 0.0f)
+    else
     {
-        m_CarSpeed -= CAR_FRICTION * deltaTime;
-        if (m_CarSpeed < 0.0f) m_CarSpeed = 0.0f;
-    }
-    else if (m_CarSpeed < 0.0f)
-    {
-        m_CarSpeed += CAR_FRICTION * deltaTime;
-        if (m_CarSpeed > 0.0f) m_CarSpeed = 0.0f;
-    }
+        // --- WALKING MODE ---
+        // Camera movement
+        if (glfwGetKey(m_Window, GLFW_KEY_W) == GLFW_PRESS) m_Camera->ProcessKeyboard(FORWARD, deltaTime);
+        if (glfwGetKey(m_Window, GLFW_KEY_S) == GLFW_PRESS) m_Camera->ProcessKeyboard(BACKWARD, deltaTime);
+        if (glfwGetKey(m_Window, GLFW_KEY_A) == GLFW_PRESS) m_Camera->ProcessKeyboard(LEFT, deltaTime);
+        if (glfwGetKey(m_Window, GLFW_KEY_D) == GLFW_PRESS) m_Camera->ProcessKeyboard(RIGHT, deltaTime);
+        // if (glfwGetKey(m_Window, GLFW_KEY_SPACE) == GLFW_PRESS) m_Camera->ProcessKeyboard(JUMP, deltaTime);
 
-    m_CarPos.y = 0.0f;
-    // m_Camera->Position.y = 0.0f;
+        // Keep camera above terrain
+        float h = getTerrainHeight(m_Camera->Position.x, m_Camera->Position.z);
+        if (m_Camera->Position.y < h + 1.8f) m_Camera->Position.y = h + 1.8f;
+    }
 }
 
 void CarDemo::OnResize(int width, int height)
@@ -366,7 +603,15 @@ void CarDemo::placeModel(Model& m, glm::vec3 position, float heightOffset, float
     glm::vec3 minW, maxW;
     m.CalculateAABB(modelMat, minW, maxW);
 
-    m_PlacedModels.push_back({ &m, modelMat, minW, maxW, movable });
+    PlacedModel pm;
+    pm.model = &m;
+    pm.baseModelMatrix = modelMat;
+    pm.bboxMin = minW;
+    pm.bboxMax = maxW;
+    pm.movable = movable;
+
+
+    m_PlacedModels.push_back(pm);
 
     std::cout << "DEBUG: Placed Model AABB: Min(" << minW.x << ", " << minW.y << ", " << minW.z 
               << ") Max(" << maxW.x << ", " << maxW.y << ", " << maxW.z << ")" << std::endl;
@@ -468,10 +713,10 @@ void CarDemo::initIBLFromEXR(const std::string& exrPath)
         glm::lookAt(glm::vec3(0.0f), glm::vec3( 0.0f, 0.0f,-1.0f), glm::vec3(0.0f,-1.0f, 0.0f))
     };
 
-    Shader equirectToCubemap("C:/Users/katal/OneDrive/Desktop/development/car/shaders/cubemap.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/equirectangular_to_cubemap.fs");
-    Shader irradianceShader("C:/Users/katal/OneDrive/Desktop/development/car/shaders/cubemap.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/irradiance_convolution.fs");
-    Shader prefilterShader("C:/Users/katal/OneDrive/Desktop/development/car/shaders/cubemap.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/prefilter.fs");
-    Shader brdfShader("C:/Users/katal/OneDrive/Desktop/development/car/shaders/brdf.vs", "C:/Users/katal/OneDrive/Desktop/development/car/shaders/brdf.fs");
+    Shader equirectToCubemap("shaders/cubemap.vs", "shaders/equirectangular_to_cubemap.fs");
+    Shader irradianceShader("shaders/cubemap.vs", "shaders/irradiance_convolution.fs");
+    Shader prefilterShader("shaders/cubemap.vs", "shaders/prefilter.fs");
+    Shader brdfShader("shaders/brdf.vs", "shaders/brdf.fs");
 
     equirectToCubemap.use();
     equirectToCubemap.setInt("equirectangularMap", 0);

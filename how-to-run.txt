@@ -17,9 +17,10 @@ Building with CMake:
 3. Build the project:
    cmake --build .
    cmake --build . --clean-first // optional 
+   cmake --build build
 
 Running the Application:
-   ./main.exe
+   ./build/main.exe
 
 Note:
 The application expects assets (models, shaders, textures) at specific absolute paths. 
